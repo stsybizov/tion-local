@@ -1,0 +1,12 @@
+.idea
+.venv
+__pycache__/
+*.pyc
+
+# Local tooling / dev artifacts — must NOT be published
+.claude/
+.vendor_src/
+.ruff_cache/
+.DS_Store
+*.log
+*.log.*

@@ -1,0 +1,213 @@
+set_air_source:
+  name: Air source
+  description: Set air source
+  target:
+    device:
+      integration: ha_tion_btle
+  fields:
+    source:
+      name: Air source
+      description: "Where breezer should get air. Not all variants may be supported by breezer"
+      example: recirculation
+      required: true
+      selector:
+        select:
+          options:
+            - "outside"
+            - "recirculation"
+            - "mixed"
+
+write_schedule:
+  name: Write schedule
+  description: >-
+    Write one of the 6 on-device schedules (a start/stop interval). The device stores
+    each schedule as two timer slots (2*index = start, 2*index+1 = stop); this writes
+    both at once.
+  fields:
+    schedule:
+      name: Schedule index
+      description: "Which schedule (0..5)."
+      required: true
+      example: 0
+      selector:
+        number:
+          min: 0
+          max: 5
+          mode: box
+    days:
+      name: Days
+      description: "Weekdays this schedule runs on."
+      required: true
+      example: '["mon","tue","wed","fri"]'
+      selector:
+        select:
+          multiple: true
+          options:
+            - { value: "mon", label: "Mon" }
+            - { value: "tue", label: "Tue" }
+            - { value: "wed", label: "Wed" }
+            - { value: "thu", label: "Thu" }
+            - { value: "fri", label: "Fri" }
+            - { value: "sat", label: "Sat" }
+            - { value: "sun", label: "Sun" }
+    start:
+      name: Start time
+      description: "When the breezer turns on (HH:MM)."
+      required: true
+      example: "07:00"
+      selector:
+        time:
+    end:
+      name: End time
+      description: "When the breezer turns off (HH:MM)."
+      required: true
+      example: "22:30"
+      selector:
+        time:
+    fan_speed:
+      name: Fan speed
+      description: "Fan speed during the interval (0..6)."
+      example: 3
+      selector:
+        number:
+          min: 0
+          max: 6
+          mode: slider
+    target_temp:
+      name: Target temperature
+      description: "Heater target temperature, °C."
+      default: 25
+      example: 25
+      selector:
+        number:
+          min: 0
+          max: 30
+          unit_of_measurement: "°C"
+          mode: box
+    air:
+      name: Air source
+      description: "Air source for the interval."
+      example: outside
+      selector:
+        select:
+          options:
+            - "outside"
+            - "recirculation"
+    heater:
+      name: Heater
+      description: "Enable the heater during the interval."
+      example: false
+      selector:
+        boolean:
+    enabled:
+      name: Enabled
+      description: "Whether the schedule is active."
+      default: true
+      selector:
+        boolean:
+
+write_timer:
+  name: Write timer (low level)
+  description: >-
+    Write a single raw on-device timer slot (0..11). Advanced: a schedule is a pair of
+    slots (even = start, odd = stop). Prefer write_schedule unless you need slot-level
+    control.
+  fields:
+    timer_id:
+      name: Slot
+      description: "Timer slot 0..11."
+      required: true
+      example: 0
+      selector:
+        number:
+          min: 0
+          max: 11
+          mode: box
+    days:
+      name: Days bitmask
+      description: "Day bitmask (bit0=Mon..bit6=Sun) or a list of weekday names."
+      example: 23
+      selector:
+        text:
+    hours:
+      name: Hours
+      example: 7
+      selector:
+        number: { min: 0, max: 23, mode: box }
+    minutes:
+      name: Minutes
+      example: 30
+      selector:
+        number: { min: 0, max: 59, mode: box }
+    fan_speed:
+      name: Fan speed
+      example: 3
+      selector:
+        number: { min: 0, max: 6, mode: slider }
+    target_temp:
+      name: Target temperature
+      default: 25
+      example: 25
+      selector:
+        number: { min: 0, max: 30, mode: box }
+    device_mode:
+      name: Air source (0/1)
+      description: "0 = outside, 1 = recirculation."
+      example: 0
+      selector:
+        number: { min: 0, max: 1, mode: box }
+    heater:
+      name: Heater
+      example: false
+      selector:
+        boolean:
+    enabled:
+      name: Enabled
+      default: true
+      selector:
+        boolean:
+
+refresh_schedule:
+  name: Refresh schedule
+  description: "Re-read the 12 schedule timers from the breezer (e.g. after editing in the Tion app)."
+
+set_turbo:
+  name: Turbo (boost)
+  description: >-
+    Run the breezer's native Turbo at max speed for the given time, then auto-return to the
+    previous/scheduled speed. The breezer must already be running. 0 has no useful effect
+    (it does not cancel — set a normal speed to stop early).
+  fields:
+    seconds:
+      name: Duration
+      description: "How long to run Turbo, in seconds (e.g. 300 = 5 min)."
+      required: true
+      example: 300
+      selector:
+        number:
+          min: 0
+          max: 3600
+          step: 30
+          unit_of_measurement: s
+          mode: box
+
+set_timers_enabled:
+  name: Enable/disable all timers (advanced)
+  description: >-
+    Enable or disable ALL on-device schedule timers at once, preserving their data (only the
+    enabled bit is toggled). Writes from a verified read; aborts if the read can't be confirmed.
+    Rarely needed — the schedule is normally edited via write_schedule.
+  fields:
+    enabled:
+      name: Enabled
+      description: "On = enable all schedules, Off = disable all."
+      required: true
+      example: true
+      selector:
+        boolean:
+
+read_turbo:
+  name: Read turbo / state (diagnostics)
+  description: >-
+    Return the native turbo state (is_active + remaining seconds), current speed/mode and the
+    raw state frame. Returns response data (use 'Perform action' with response variable).

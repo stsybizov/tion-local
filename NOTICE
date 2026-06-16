@@ -1,0 +1,25 @@
+Tion Local
+Copyright 2025 Tion Local contributors
+
+This product is a derivative work licensed under the Apache License, Version 2.0.
+
+It is based on and includes code from:
+
+  HA-tion — Home Assistant Tion integration
+  Copyright (c) IATkachenko and contributors
+  https://github.com/TionAPI/HA-tion
+  Licensed under the Apache License, Version 2.0.
+  Includes the bundled "tion_btle" library from the same project
+  (vendored under custom_components/ha_tion_btle/vendor/tion_btle).
+
+The Tion 4S Bluetooth protocol details used for the extended 4S features
+(state frame, timers, turbo, error/warning codes) were derived with reference to:
+
+  esphome-tion
+  Copyright (c) Dentra (https://github.com/dentra) and contributors
+  https://github.com/dentra/esphome-tion
+  Licensed under the MIT License.
+
+This project is not affiliated with, endorsed by, or supported by Tion / TION LLC.
+"Tion" and product names are trademarks of their respective owners and are used
+for identification only.

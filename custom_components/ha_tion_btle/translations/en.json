@@ -1,0 +1,117 @@
+{
+  "title": "Tion Local",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configuration for Tion breezer",
+        "data": {
+          "model": "Device model",
+          "mac": "Device MAC address",
+          "name": "Name for device",
+          "away_temp": "Temperature (celsius) for AWAY mode",
+          "keep_alive": "Interval for querying breezer",
+          "pair": "Need device pairing?"
+        },
+        "data_description": {
+          "mac": "Bluetooth MAC address in the form AA:BB:CC:DD:EE:FF — UPPERCASE hex with colon ':' separators.",
+          "keep_alive": "Seconds between polls of the breezer. Larger values keep BLE free for commands and let the breezer advertise between polls (default 300)."
+        }
+      },
+      "pair": {
+        "title": "Device pairing",
+        "description": "Turn breezer to pair mode by holding button for more than 5 seconds for pairing with Home Assistant.\n\nMake sure that there is no devices connected to breezer while adding it to Home Assistant.\n\n![Location of button on bridge](/static/images/config_philips_hue.jpg)"
+      },
+      "pair_failed": {
+        "title": "Could not pair!",
+        "description": "Error occurs while pairing routine! Check logs for details.\n\nMake sure that there is no devices connected to breezer while adding it to Home Assistant."
+      },
+      "add_failed": {
+        "title": "Could not get test data from breezer!",
+        "description": "Error occurs while getting data. May be you need pairing. Check logs for details.\n\nMake sure that there is no devices connected to breezer while adding it to Home Assistant."
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configuration for Tion breezer",
+        "data": {
+          "name": "Name for device",
+          "away_temp": "Temperature (celsius) for AWAY mode",
+          "keep_alive": "Interval for querying breezer"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "in_temp": { "name": "Input temperature" },
+      "out_temp": { "name": "Output temperature" },
+      "filter_remain": { "name": "Filter remaining life" },
+      "current_fan_speed": { "name": "Current fan speed" },
+      "rssi": { "name": "Signal strength" },
+      "heater_power": { "name": "Heater power" },
+      "airflow": { "name": "Air passed" },
+      "work_time": { "name": "Work time" },
+      "fan_time": { "name": "Fan run time" },
+      "pcb_ctl_temperature": { "name": "Control board temperature" },
+      "pcb_pwr_temperature": { "name": "Power board temperature" },
+      "firmware": { "name": "Firmware" },
+      "energy": { "name": "Energy" },
+      "productivity": { "name": "Productivity" },
+      "air_passed": { "name": "Air passed" },
+      "fan_power": { "name": "Fan power" },
+      "total_power": { "name": "Total power" },
+      "schedule": { "name": "Schedule" }
+    },
+    "binary_sensor": {
+      "problem": { "name": "Problem", "state": { "off": "No", "on": "Yes" } }
+    },
+    "button": {
+      "reset_filter": { "name": "Reset filter life" },
+      "boost": { "name": "Boost" }
+    },
+    "number": {
+      "heater_temp": { "name": "Target output temperature" }
+    },
+    "select": {
+      "air_mode": {
+        "name": "Air intake",
+        "state": {
+          "outside": "Outside",
+          "recirculation": "Recirculation",
+          "mixed": "Mixed"
+        }
+      },
+      "speed": { "name": "Speed" },
+      "boost_time": { "name": "Boost duration" }
+    },
+    "fan": {
+      "fan_speed": {
+        "name": "Fan speed",
+        "state_attributes": {
+          "preset_mode": { "state": { "none": "Normal", "boost": "Turbo" } }
+        }
+      }
+    },
+    "switch": {
+      "app_access": { "name": "App access (release BLE)" },
+      "sound": { "name": "Sound" },
+      "led": { "name": "Backlight" }
+    },
+    "climate": {
+      "tion": {
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "none": "Normal",
+              "boost": "Turbo",
+              "sleep": "Sleep",
+              "away": "Away"
+            }
+          }
+        }
+      }
+    }
+  }
+}
