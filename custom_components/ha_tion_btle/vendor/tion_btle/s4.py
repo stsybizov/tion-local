@@ -256,6 +256,51 @@ class TionS4(TionLiteFamily):
     def REQUEST_PARAMS(self) -> list:
         return [50, 50]  # 0x32 0x32
 
+    def _collect_message(self, package: bytearray) -> bool:
+        """S4 frame assembler that de-duplicates retransmitted BLE fragments.
+
+        The 4S (or the bluetooth_proxy in between) sometimes delivers the SAME middle
+        notification several times. The base Lite assembler blindly appends every
+        fragment, which inflates the state frame and shifts its tail — the fields at
+        byte offsets 25-30 (errors / max_fan_speed / heater_var) end up read from a
+        duplicated middle chunk instead of the real END packet. That surfaced as a
+        phantom "Problem" (garbage errors) and a stuck heater_power (heater_var=109 ->
+        1090 W) even with the heater off. We drop a fragment whose payload is identical
+        to the one just appended, which reconstructs the real 31-byte state frame.
+        """
+        self._have_full_package = False
+        _LOGGER.debug("Got %s from tion", bytes(package).hex())
+
+        pid = package[0]
+        if pid == self.FIRST_PACKET_ID or pid == self.SINGLE_PACKET_ID:
+            self._data = package
+            self._have_full_package = pid == self.SINGLE_PACKET_ID
+            self._got_new_sequence = pid == self.FIRST_PACKET_ID
+            self._last_fragment = None
+        elif pid == self.MIDDLE_PACKET_ID or pid == self.END_PACKET_ID:
+            if not self._got_new_sequence:
+                _LOGGER.critical("Got %s packet but waiting for a first!",
+                                 "middle" if pid == self.MIDDLE_PACKET_ID else "end")
+            else:
+                fragment = bytes(package[1:])
+                if fragment == getattr(self, "_last_fragment", None):
+                    _LOGGER.debug("Dropping duplicate BLE fragment %s", fragment.hex())
+                else:
+                    self._data += bytearray(fragment)
+                    self._last_fragment = fragment
+                if pid == self.END_PACKET_ID:
+                    self._have_full_package = True
+                    self._got_new_sequence = False
+        else:
+            _LOGGER.error("Unknown package id %s", hex(pid))
+
+        if self._have_full_package:
+            self._header = self._data[:15]
+            self._data = self._data[15:-2]
+            self._crc = self._data[-2:]
+
+        return self._have_full_package
+
     def _decode_response(self, response: bytearray):
         _LOGGER.debug("Data is %s", bytes(response).hex())
         self._last_state_raw = bytes(response).hex()  # full state frame, for diagnostics
@@ -289,11 +334,15 @@ class TionS4(TionLiteFamily):
             )
 
     def _generate_model_specific_json(self) -> dict:
+        # Heater load (%) -> watts on the common 1000 W 4S element. heater_var is 0 when
+        # the heater is off, but guard anyway: clamp to a valid 0-100 % and report 0 W
+        # whenever the breezer is not actually heating (off, or fan-only mode) so a stray
+        # reading can never surface as phantom heater power.
+        heater_load = self._heater_var if 0 <= self._heater_var <= 100 else 0
+        heater_power = round(heater_load * 10) if (self._state and self._heater) else 0
         return {
             "light": self.light,
-            # heater load (%) -> watts; assume the common 1000 W heating element
-            # (Tion 4S). heater_var is 0 when the heater is off.
-            "heater_power": round(self._heater_var * 10),
+            "heater_power": heater_power,
             "work_time_d": round(self._work_time / 86400, 1),
             "fan_time_d": round(self._fan_time / 86400, 1),
             "pcb_ctl_c": self._pcb_ctl_temp,
