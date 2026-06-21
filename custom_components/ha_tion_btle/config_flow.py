@@ -6,14 +6,17 @@ import datetime
 import asyncio
 
 import bleak
-import tion_btle
 import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback, async_get_hass
-from tion_btle.tion import Tion
+
+# Vendored fork of tion_btle (see vendor/tion_btle) — same package the runtime uses,
+# so the config flow probes the breezer with our fixes and needs no PyPI dependency.
+from .vendor import tion_btle
+from .vendor.tion_btle.tion import Tion
 
 from .const import DOMAIN, TION_SCHEMA, CONF_MAC
 from . import robust_connection
@@ -107,11 +110,11 @@ class TionFlow:
             raise bleak.BleakError(message)
 
         if model == 'S3':
-            from tion_btle.s3 import TionS3 as Breezer
+            from .vendor.tion_btle.s3 import TionS3 as Breezer
         elif model == 'S4':
-            from tion_btle.s4 import TionS4 as Breezer
+            from .vendor.tion_btle.s4 import TionS4 as Breezer
         elif model == 'Lite':
-            from tion_btle.lite import TionLite as Breezer
+            from .vendor.tion_btle.lite import TionLite as Breezer
         else:
             raise NotImplementedError("Model '%s' is not supported!" % model)
         return Breezer(btle_device)
