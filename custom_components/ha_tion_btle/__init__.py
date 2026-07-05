@@ -120,6 +120,9 @@ async def async_setup_entry(hass, config_entry: ConfigEntry):
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
     async def _first_refresh_then_recover():
+        # Stored schedule first: arms the watchdog right away and skips the slow
+        # 12-slot BLE read on every restart.
+        await instance.async_load_stored_schedule()
         await instance.async_refresh()
         # If HA restarted mid-boost, finalize it (restore speed + re-enable paused timers).
         await instance.async_recover_boost()
@@ -179,12 +182,18 @@ async def async_setup_entry(hass, config_entry: ConfigEntry):
             inst = next(iter(hass.data[DOMAIN].values()))
             return await inst.async_read_turbo()
 
+        async def _svc_read_time(call):
+            inst = next(iter(hass.data[DOMAIN].values()))
+            return await inst.async_read_time()
+
         hass.services.async_register(DOMAIN, "write_timer", _svc_write_timer)
         hass.services.async_register(DOMAIN, "write_schedule", _svc_write_schedule)
         hass.services.async_register(DOMAIN, "refresh_schedule", _svc_refresh_schedule)
         hass.services.async_register(DOMAIN, "set_turbo", _svc_set_turbo)
         hass.services.async_register(DOMAIN, "set_timers_enabled", _svc_set_timers_enabled)
         hass.services.async_register(DOMAIN, "read_turbo", _svc_read_turbo,
+                                     supports_response=SupportsResponse.ONLY)
+        hass.services.async_register(DOMAIN, "read_time", _svc_read_time,
                                      supports_response=SupportsResponse.ONLY)
     return True
 
@@ -196,10 +205,13 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> 
     if unload_ok:
         instance = hass.data.get(DOMAIN, {}).pop(config_entry.unique_id, None)
         if instance is not None:
-            # Cancel a pending boost timer and release the held BLE link.
+            # Cancel pending boost/watchdog timers and release the held BLE link.
             if getattr(instance, "_boost_unsub", None) is not None:
                 instance._boost_unsub()
                 instance._boost_unsub = None
+            if getattr(instance, "_watchdog_unsub", None) is not None:
+                instance._watchdog_unsub()
+                instance._watchdog_unsub = None
             try:
                 await instance._reset_link()  # force-drop the held BLE link
             except Exception as e:  # noqa: BLE001 - best effort
@@ -207,7 +219,7 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> 
         # Drop domain-level services when the last entry is gone.
         if not hass.data.get(DOMAIN):
             for svc in ("write_timer", "write_schedule", "refresh_schedule",
-                        "set_turbo", "set_timers_enabled", "read_turbo"):
+                        "set_turbo", "set_timers_enabled", "read_turbo", "read_time"):
                 if hass.services.has_service(DOMAIN, svc):
                     hass.services.async_remove(DOMAIN, svc)
     return unload_ok
@@ -257,6 +269,12 @@ class TionInstance(DataUpdateCoordinator):
         self._boost_end_ts: float = 0   # epoch when the current boost should end
         self._boost_store = None     # homeassistant.helpers.storage.Store (lazy)
         self._post_set_unsub = None  # one-shot refresh scheduled after a set() command
+
+        # On-device schedule watchdog + persisted schedule cache + daily RTC sync.
+        self._sched_store = None       # Store with the last-known 12 timers (lazy)
+        self._watchdog_unsub = None    # pending watchdog timer (next switch point + lag)
+        self._clock_last_sync: float = 0.0
+        self._device_epoch_local: bool | None = None  # empirical: device epoch is local time?
 
         self.__tion: Tion = self.getTion(self.model, btle_device)
         self.__keep_alive = datetime.timedelta(seconds=self.__keep_alive)
@@ -383,9 +401,22 @@ class TionInstance(DataUpdateCoordinator):
             try:
                 self._schedule = await self.__tion.get_timers()
                 self._schedule_fetched = True
+                await self._persist_schedule()
+                self._arm_watchdog()
             except Exception as e:  # noqa: BLE001
                 _LOGGER.debug("schedule fetch failed (will retry): %s", e)
         response["schedule"] = self._schedule
+
+        # Daily device-RTC sync. The phone app used to sync the breezer clock on every
+        # connect; with HA holding the BLE link nobody does, the RTC drifts and the
+        # on-device schedule fires at the wrong times (or seemingly not at all).
+        if hasattr(self.__tion, "get_time") and \
+                datetime.datetime.now().timestamp() - self._clock_last_sync > 86400:
+            try:
+                async with asyncio.timeout(self._poll_timeout):
+                    await self._async_sync_clock()
+            except Exception as e:  # noqa: BLE001 - best effort, retry next poll
+                _LOGGER.debug("clock sync failed (will retry): %s", e)
 
         self.logger.debug(f"Result is {response}")
         return response
@@ -404,7 +435,172 @@ class TionInstance(DataUpdateCoordinator):
             by_id[int(t["id"])] = t
         self._schedule = [by_id[i] for i in sorted(by_id)]
         self.data["schedule"] = self._schedule
+        await self._persist_schedule()
+        self._arm_watchdog()
         self.async_update_listeners()
+
+    # --- On-device schedule: persisted cache, RTC sync and watchdog -----------------
+
+    _WATCHDOG_LAG = 300      # check 5 min after each scheduled switch point
+    _CLOCK_THRESHOLD = 60    # correct the device RTC when off by more than this (s)
+
+    def _get_sched_store(self) -> Store:
+        if self._sched_store is None:
+            self._sched_store = Store(self.hass, 1, f"{DOMAIN}_schedule_{self._config_entry.entry_id}")
+        return self._sched_store
+
+    async def _persist_schedule(self) -> None:
+        try:
+            await self._get_sched_store().async_save({"timers": self._schedule})
+        except Exception as e:  # noqa: BLE001 - cache only, never break the poll
+            _LOGGER.debug("schedule persist failed: %s", e)
+
+    async def async_load_stored_schedule(self) -> None:
+        """Load the persisted schedule at startup — arms the watchdog immediately and
+        skips the slow 12-slot BLE read (HA is the only schedule writer while it holds
+        the link, so the stored copy is authoritative)."""
+        try:
+            stored = await self._get_sched_store().async_load()
+        except Exception as e:  # noqa: BLE001
+            stored = None
+            _LOGGER.debug("schedule store load failed: %s", e)
+        if stored and stored.get("timers"):
+            self._schedule = stored["timers"]
+            self._schedule_fetched = True
+            self._arm_watchdog()
+            _LOGGER.debug("Loaded %d stored timers", len(self._schedule))
+
+    async def _async_sync_clock(self) -> None:
+        """Read the device RTC, log the drift against the host clock (both epoch
+        interpretations) and correct it when off by more than _CLOCK_THRESHOLD."""
+        dev = await self.__tion.get_time()
+        if dev is None:
+            return
+        now = datetime.datetime.now().timestamp()
+        off = (datetime.datetime.now().astimezone().utcoffset() or datetime.timedelta()).total_seconds()
+        d_utc, d_loc = dev - now, dev - (now + off)
+        self._device_epoch_local = abs(d_loc) < abs(d_utc)
+        delta = d_loc if self._device_epoch_local else d_utc
+        _LOGGER.info("Device clock: delta_utc=%+.0fs delta_local=%+.0fs (device epoch looks %s)",
+                     d_utc, d_loc, "local" if self._device_epoch_local else "UTC")
+        if abs(delta) > self._CLOCK_THRESHOLD:
+            target = now + (off if self._device_epoch_local else 0)
+            await self.__tion.set_time(int(target))
+            back = await self.__tion.get_time()
+            if back is not None and abs(back - target) > self._CLOCK_THRESHOLD:
+                _LOGGER.error("Device clock still off by %+.0fs after set_time — "
+                              "TIME_SET payload layout may need adjusting", back - target)
+            else:
+                _LOGGER.info("Device clock corrected by %+.0fs", -delta)
+        self._clock_last_sync = now
+
+    def _active_timers(self) -> list[dict]:
+        return [t for t in (self._schedule or []) if t.get("enabled") and t.get("days")]
+
+    def _next_switch_point(self, now: datetime.datetime) -> datetime.datetime | None:
+        """The earliest future occurrence of any active timer (device day bits: bit0=Mon)."""
+        best = None
+        for t in self._active_timers():
+            for off in range(8):
+                d = now + datetime.timedelta(days=off)
+                if not t["days"] & (1 << d.weekday()):
+                    continue
+                cand = d.replace(hour=t["hours"], minute=t["minutes"], second=0, microsecond=0)
+                if cand > now:
+                    if best is None or cand < best:
+                        best = cand
+                    break  # earliest occurrence of this timer found
+        return best
+
+    def _expected_state(self, now: datetime.datetime) -> dict | None:
+        """The timer that fired most recently — device schedule is point events, so the
+        latest past event defines the expected current state."""
+        best_time, best = None, None
+        for t in self._active_timers():
+            for off in range(8):
+                d = now - datetime.timedelta(days=off)
+                if not t["days"] & (1 << d.weekday()):
+                    continue
+                cand = d.replace(hour=t["hours"], minute=t["minutes"], second=0, microsecond=0)
+                if cand <= now:
+                    if best_time is None or cand > best_time:
+                        best_time, best = cand, t
+                    break  # most recent past occurrence of this timer found
+        return best
+
+    def _arm_watchdog(self) -> None:
+        """(Re)schedule the watchdog check for the next switch point + _WATCHDOG_LAG."""
+        if self._watchdog_unsub is not None:
+            self._watchdog_unsub()
+            self._watchdog_unsub = None
+        now = datetime.datetime.now()
+        nxt = self._next_switch_point(now)
+        if nxt is None:
+            _LOGGER.debug("Schedule watchdog idle: no active timers")
+            return
+        # ponytail: wall-clock delay — off by 1h on the two DST nights a year, self-corrects next event
+        delay = (nxt - now).total_seconds() + self._WATCHDOG_LAG
+        self._watchdog_unsub = async_call_later(self.hass, delay, self._watchdog_fired)
+        _LOGGER.debug("Schedule watchdog armed for %s +%ds", nxt, self._WATCHDOG_LAG)
+
+    @callback
+    def _watchdog_fired(self, _now) -> None:
+        self._watchdog_unsub = None
+        self.hass.async_create_task(self._watchdog_check())
+
+    async def _watchdog_check(self) -> None:
+        """The breezer sometimes misses its own schedule switch points (observed with a
+        permanently held BLE link). Compare the actual state with the expected one and
+        enforce the scheduled state on mismatch; between points do nothing, so manual
+        overrides are never touched."""
+        try:
+            if self._maintenance or self._boost_active:
+                return
+            if not self.last_update_success or "is_on" not in (self.data or {}):
+                return
+            exp = self._expected_state(datetime.datetime.now())
+            if exp is None:
+                return
+            want: dict = {}
+            if exp.get("power"):
+                if not self.data.get("is_on"):
+                    want["is_on"] = True
+                if int(self.data.get("fan_speed") or 0) != int(exp["fan_speed"]):
+                    want["fan_speed"] = int(exp["fan_speed"])
+                if bool(self.data.get("heater")) != bool(exp["heater"]):
+                    want["heater"] = bool(exp["heater"])
+                mode = "recirculation" if exp.get("device_mode") else "outside"
+                if self.data.get("mode") != mode:
+                    want["mode"] = mode
+                if exp["heater"] and int(self.data.get("heater_temp") or 0) != int(exp["target_temp"]):
+                    want["heater_temp"] = int(exp["target_temp"])
+            elif self.data.get("is_on"):
+                want["is_on"] = False
+            if want:
+                _LOGGER.warning("Schedule watchdog: state diverged from timer %s (%s) — enforcing %s",
+                                exp.get("id"), exp.get("time"), want)
+                try:
+                    await self.set(**want)
+                except Exception as e:  # noqa: BLE001 - keep the watchdog alive
+                    _LOGGER.warning("Schedule watchdog enforcement failed: %s", e)
+        finally:
+            self._arm_watchdog()
+
+    async def async_read_time(self) -> dict:
+        """Diagnostics for the ha_tion_btle.read_time service: device RTC vs host."""
+        if not hasattr(self.__tion, "get_time"):
+            return {"error": "not supported for this model"}
+        async with asyncio.timeout(self._poll_timeout):
+            dev = await self.__tion.get_time()
+        now = datetime.datetime.now().timestamp()
+        off = (datetime.datetime.now().astimezone().utcoffset() or datetime.timedelta()).total_seconds()
+        return {
+            "device_time": dev,
+            "host_time": int(now),
+            "delta_utc_s": None if dev is None else round(dev - now),
+            "delta_local_s": None if dev is None else round(dev - (now + off)),
+            "raw": getattr(self.__tion, "_last_time_raw", None),
+        }
 
     async def async_write_timer(self, timer_id: int, *, days: int = 0x7F, hours: int = 0,
                                 minutes: int = 0, fan_speed: int = 1, target_temp: int = 25,

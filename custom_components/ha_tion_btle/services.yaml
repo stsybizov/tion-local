@@ -211,3 +211,10 @@ read_turbo:
   description: >-
     Return the native turbo state (is_active + remaining seconds), current speed/mode and the
     raw state frame. Returns response data (use 'Perform action' with response variable).
+
+read_time:
+  name: Read device clock (diagnostics)
+  description: >-
+    Read the breezer's internal clock (RTC) and return it together with the host time and
+    the drift in seconds (both UTC and local-epoch interpretations). The on-device schedule
+    runs on this clock; the integration re-syncs it automatically once a day.

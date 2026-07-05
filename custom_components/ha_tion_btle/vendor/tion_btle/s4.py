@@ -499,3 +499,68 @@ class TionS4(TionLiteFamily):
         }
         _LOGGER.info("get_turbo -> %s", out)
         return out
+
+    @staticmethod
+    def _sane_unix(ts: int) -> bool:
+        return 946684800 < ts < 4102444800  # year 2000..2100
+
+    async def get_time(self) -> int | None:
+        """Read the device RTC via TIME_REQ (0x3632). Tries the dentra frame first
+        (request_id-correlated, like get_turbo), then falls back to the lib-style read
+        envelope — this firmware ignores the dentra read frame for TIMERs, so TIME may
+        behave the same. Response payload carries int64 unix_time LE."""
+        self._last_time_raw = None
+        ts = None
+        try:
+            await self.connect()
+            while self._delegation.haveNewData:
+                _ = self._delegation.data
+            app = await self._xfer(0x3632, b"")
+            if app is not None and len(app) >= 12:
+                self._last_time_raw = bytes(app).hex()
+                cand = int.from_bytes(app[4:12], "little", signed=True)
+                if self._sane_unix(cand):
+                    ts = cand
+            if ts is None:
+                # lib-style read envelope, same construction as _command_getTimer_lib
+                body = [TionLiteFamily.SINGLE_PACKET_ID, 0x00, 0x00, self.MAGIC_NUMBER, 0xa1,
+                        0x32, 0x36] + self.random4 + self.random4
+                body[1] = len(body) + len(self.CRC) - 1
+                await self._try_write(request=bytearray(body + self.CRC))
+                resp = await self._get_data_from_breezer()
+                if resp:
+                    self._last_time_raw = bytes(resp).hex()
+                    if len(resp) >= 8:
+                        cand = int.from_bytes(resp[0:8], "little", signed=True)
+                        if self._sane_unix(cand):
+                            ts = cand
+        except Exception as e:  # noqa: BLE001
+            _LOGGER.debug("get_time io: %s", e)
+        finally:
+            await self.disconnect()
+        _LOGGER.info("get_time -> %s (raw=%s)", ts, self._last_time_raw)
+        return ts
+
+    async def set_time(self, unix_ts: int) -> bytes | None:
+        """Set the device RTC via TIME_SET (0x3630). Same offset-14 quirk as
+        set_timer/set_turbo: 3 pad bytes after request_id so unix_time lands at
+        frame offset 14 (2-for-2 on this firmware for SET frames)."""
+        rid = self._next_req_id()
+        payload = rid.to_bytes(4, 'little') + bytes(3) + int(unix_ts).to_bytes(8, 'little', signed=True)
+        frame = self._build_ble_frame(0x3630, payload, ble_req_id=1)
+        resp = b""
+        try:
+            await self.connect()
+            while self._delegation.haveNewData:
+                _ = self._delegation.data
+            for pkt in self._fragment_ble(frame):
+                await self._try_write(bytearray(pkt))
+            try:
+                resp = await self._get_data_from_breezer()
+            except Exception as e:  # noqa: BLE001
+                _LOGGER.debug("set_time(%d) no response: %s", unix_ts, e)
+        finally:
+            await self.disconnect()
+        _LOGGER.info("set_time(%d) frame=%s -> %s", unix_ts, frame.hex(),
+                     bytes(resp).hex() if resp else None)
+        return resp
