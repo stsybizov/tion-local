@@ -62,7 +62,7 @@ class TionClimateEntity(ClimateEntity, CoordinatorEntity):
     _attr_fan_modes = [1, 2, 3, 4, 5, 6]
     _attr_precision = PRECISION_WHOLE
     _attr_target_temperature_step = 1
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_preset_modes = [PRESET_NONE, PRESET_BOOST, PRESET_SLEEP]
     _attr_preset_mode = PRESET_NONE
     _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.FAN_MODE | ClimateEntityFeature.PRESET_MODE
@@ -117,7 +117,7 @@ class TionClimateEntity(ClimateEntity, CoordinatorEntity):
             await self._async_set_state(is_on=False)
 
         elif hvac_mode == HVACMode.HEAT:
-            saved_target_temp = self.target_temperature
+            saved_target_temp = self.native_target_temperature
             try:
                 await self.coordinator.connect()
                 await self._async_set_state(heater=True, is_on=True)
@@ -139,8 +139,8 @@ class TionClimateEntity(ClimateEntity, CoordinatorEntity):
         actions = []
         _LOGGER.debug("Going to change preset mode from %s to %s", self.preset_mode, preset_mode)
         if preset_mode == PRESET_AWAY and self.preset_mode != PRESET_AWAY:
-            _LOGGER.info("Going to AWAY mode. Will save target temperature %s", self.target_temperature)
-            self._saved_target_temp = self.target_temperature
+            _LOGGER.info("Going to AWAY mode. Will save target temperature %s", self.native_target_temperature)
+            self._saved_target_temp = self.native_target_temperature
             actions.append([self._async_set_state, {'heater_temp': self._away_temp}])
 
         if preset_mode != PRESET_AWAY and self.preset_mode == PRESET_AWAY and self._saved_target_temp:
@@ -257,8 +257,8 @@ class TionClimateEntity(ClimateEntity, CoordinatorEntity):
         self.async_write_ha_state()
 
     def _get_current_state(self):
-        self._attr_target_temperature = self.coordinator.data.get("heater_temp")
-        self._attr_current_temperature = self.coordinator.data.get("out_temp")
+        self._attr_native_target_temperature = self.coordinator.data.get("heater_temp")
+        self._attr_native_current_temperature = self.coordinator.data.get("out_temp")
         self._attr_fan_mode = self.coordinator.data.get("fan_speed")
         self._attr_assumed_state = False if self.coordinator.last_update_success else True
         self._attr_extra_state_attributes = {

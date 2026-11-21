@@ -1,4 +1,4 @@
-![минимальная версия HA](https://img.shields.io/badge/minimum%20HA%20version-2024.1-blue)
+![минимальная версия HA](https://img.shields.io/badge/minimum%20HA%20version-2026.11-blue)
 ![HACS custom](https://img.shields.io/badge/HACS-Custom-41BDF5)
 
 # Tion Local
@@ -27,6 +27,7 @@
 ## Требования
 
 - Home Assistant с работающей интеграцией **Bluetooth** (встроенный адаптер, USB-донгл или **ESP32 `bluetooth_proxy`** рядом с бризером — рекомендуется, если прибор далеко от хоста)
+- Home Assistant **2026.11** или новее (используется climate API с native-единицами; для более старых HA — v1.1.1)
 - Бризер **Tion 4S**
 - Приложение Tion должно быть **отключено**, пока подключён Home Assistant — BLE допускает только одно соединение
 

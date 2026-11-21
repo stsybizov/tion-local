@@ -1,4 +1,4 @@
-![minimum HA version](https://img.shields.io/badge/minimum%20HA%20version-2024.1-blue)
+![minimum HA version](https://img.shields.io/badge/minimum%20HA%20version-2026.11-blue)
 ![HACS custom](https://img.shields.io/badge/HACS-Custom-41BDF5)
 
 # Tion Local
@@ -27,6 +27,7 @@ This is a standalone fork focused on the **Tion 4S**, with extended telemetry, n
 ## Requirements
 
 - Home Assistant with a working **Bluetooth** integration (built-in adapter, USB dongle, or an **ESP32 `bluetooth_proxy`** near the breezer — recommended if the breezer is far from the host)
+- Home Assistant **2026.11** or newer (uses the native-unit climate API; for older HA use v1.1.1)
 - A **Tion 4S** breezer
 - The Tion phone app must be **disconnected** while Home Assistant is connected — BLE allows a single connection at a time
 
